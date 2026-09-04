@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoice {{ invoice.number }}</title>
+<style>
+  body { font-family: monospace; max-width: 420px; margin: 20px auto; padding: 0 10px; font-size: 13px; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 14px 0 5px; }
+  .meta { margin-bottom: 12px; color: #333; line-height: 1.45; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  th, td { text-align: left; padding: 3px 0; vertical-align: top; }
+  th:last-child, td:last-child { text-align: right; }
+  .totals td { padding-top: 4px; }
+  .totals .grand { font-weight: bold; border-top: 1px solid #000; padding-top: 6px; }
+  .payment-summary { border: 1px solid #bbb; padding: 8px; margin: 12px 0; }
+  .payment-summary div { display: flex; justify-content: space-between; padding: 2px 0; }
+  .status { font-weight: bold; }
+  .print-btn { margin-top: 16px; padding: 8px 16px; }
+  @media print { .print-btn { display: none; } body { margin: 0 auto; } }
+</style>
+</head>
+<body>
+  <h1>{{ invoice.branch.name }}</h1>
+  <div class="meta">
+    {% if invoice.branch.address %}{{ invoice.branch.address }}<br>{% endif %}
+    {% if invoice.branch.gstin %}GSTIN: {{ invoice.branch.gstin }}<br>{% endif %}
+    Invoice: {{ invoice.number }}<br>
+    Date: {{ invoice.invoice_date }}<br>
+    {% if invoice.customer %}
+      Customer: {{ invoice.customer.name }}{% if invoice.customer.phone %} ({{ invoice.customer.phone }}){% endif %}<br>
+    {% else %}
+      Customer: Walk-in Customer<br>
+    {% endif %}
+    Bill type: {{ invoice.get_bill_type_display }}
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
+    </thead>
+    <tbody>
+      {% for item in invoice.items.all %}
+      <tr>
+        <td>{{ item.product_name }}</td>
+        <td>{{ item.quantity }}</td>
+        <td>{{ item.unit_price }}</td>
+        <td>{{ item.line_total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td>Subtotal</td><td>₹{{ invoice.subtotal }}</td></tr>
+    {% if invoice.bill_type == "GST" %}
+    <tr><td>CGST (9%)</td><td>₹{{ invoice.cgst }}</td></tr>
+    <tr><td>SGST (9%)</td><td>₹{{ invoice.sgst }}</td></tr>
+    {% endif %}
+    <tr class="grand"><td>Total</td><td>₹{{ invoice.total }}</td></tr>
+  </table>
+
+  <div class="payment-summary">
+    <div><span>Paid</span><strong>₹{{ invoice.paid_amount }}</strong></div>
+    <div><span>Balance due</span><strong>₹{{ invoice.balance_due }}</strong></div>
+    <div><span>Status</span><span class="status">{{ invoice.get_payment_status_display }}</span></div>
+  </div>
+
+  {% if invoice.payments.all %}
+  <h2>Payment history</h2>
+  <table>
+    <thead><tr><th>Date / Type</th><th>Mode</th><th>Amount</th></tr></thead>
+    <tbody>
+      {% for payment in invoice.payments.all %}
+      <tr>
+        <td>{{ payment.payment_date }}<br>{{ payment.get_payment_type_display }}</td>
+        <td>{{ payment.get_payment_mode_display }}</td>
+        <td>₹{{ payment.amount }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <button class="print-btn" onclick="window.print()">Print</button>
+</body>
+</html>

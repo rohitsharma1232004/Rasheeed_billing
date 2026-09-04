@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Rasheed{% endblock %}</title>
+{% load static %}
+<link rel="stylesheet" href="{% static 'css/app.css' %}">
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+{% if user.is_authenticated %}
+<div class="topbar">
+  <span class="topbar-user">{{ user.get_username }} &middot; {{ user.get_role_display }}</span>
+  <form method="post" action="{% url 'logout' %}" class="topbar-logout">
+    {% csrf_token %}
+    <button type="submit">Sign out</button>
+  </form>
+</div>
+{% endif %}
+{% block content %}{% endblock %}
+</body>
+</html>

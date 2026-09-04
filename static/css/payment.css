@@ -1,0 +1,45 @@
+#advance-payment-box {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #e0bd78;
+  border-radius: 8px;
+  background: #fff9ed;
+}
+
+#advance-payment-box input {
+  width: 100%;
+  padding: 8px;
+  margin-top: 4px;
+  border: 1px solid #d5d8de;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.cart-summary.compact {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.cart-summary.grand {
+  margin-top: 0;
+  font-size: 16px;
+}
+
+.remaining-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.payment-hint {
+  min-height: 32px;
+  margin: 10px 0 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.35;
+}

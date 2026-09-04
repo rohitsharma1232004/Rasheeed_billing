@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}POS Terminal - Rasheed{% endblock %}
+
+{% block content %}
+<div id="pos-root" data-branch="{% if branch %}{{ branch.id }}{% endif %}"></div>
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'css/payment.css' %}">
+<script defer src="{% static 'js/pos.js' %}"></script>
+{% endblock %}

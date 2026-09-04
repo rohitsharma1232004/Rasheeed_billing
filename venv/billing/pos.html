@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}POS — {{ branch.name }}{% endblock %}
+{% block content %}
+<!--
+  This shell intentionally stays thin. Port the New Bill / Gallery / Ledger
+  screens from the front-end demo (rasheed-billing-demo.html) into this
+  template, swapping its in-memory JS `products`/`cart`/`invoices` state for
+  fetch() calls against these endpoints:
+ 
+    GET  /api/products/?q=<search>&page=<n>   → paginated product search
+    POST /billing/invoice/create/             → { product_id[], quantity[],
+                                                    bill_type, payment_mode }
+                                                 returns { invoice_number,
+                                                    total, print_url }
+ 
+  On success, redirect/open print_url for the browser-print path — the
+  server has already queued the thermal-print job in the background,
+  so nothing here needs to wait on it.
+-->
+<div id="pos-root" data-branch="{{ branch.code }}"></div>
+<script src="/static/js/pos.js" defer></script>
+{% endblock %}
