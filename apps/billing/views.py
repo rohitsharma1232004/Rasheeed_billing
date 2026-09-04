@@ -1,9 +1,11 @@
 from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Sum
+from django.db import transaction
+from django.db.models import Max, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.inventory.models import Product
@@ -17,6 +19,29 @@ from .services import PaymentError, create_invoice, record_payment
 
 def _money_string(value):
     return f"{Decimal(value):.2f}"
+
+
+def _resolve_customer(payload):
+    customer_id = payload.get("customer_id")
+    if customer_id:
+        try:
+            return Customer.objects.get(pk=int(customer_id))
+        except (Customer.DoesNotExist, TypeError, ValueError) as exc:
+            raise ValueError("Unknown customer") from exc
+
+    name = payload.get("customer_name", "").strip()
+    phone = payload.get("customer_phone", "").strip()
+    if not name and not phone:
+        return None
+    if not name:
+        raise ValueError("Enter the customer name")
+
+    customer = None
+    if phone:
+        customer = Customer.objects.filter(phone=phone).order_by("id").first()
+    if customer is None:
+        customer = Customer.objects.create(name=name, phone=phone)
+    return customer
 
 
 @login_required
@@ -58,29 +83,23 @@ def create_invoice_view(request):
             return JsonResponse({"error": f"Unknown product {product_id}"}, status=400)
         cart_lines.append({"product": product, "quantity": quantity})
 
-    customer = None
-    customer_id = payload.get("customer_id")
-    if customer_id:
-        try:
-            customer = Customer.objects.get(pk=int(customer_id))
-        except (Customer.DoesNotExist, TypeError, ValueError):
-            return JsonResponse({"error": "Unknown customer"}, status=400)
-
     amount_paid = payload.get("amount_paid")
     if amount_paid == "" or amount_paid is None:
         amount_paid = None
 
     try:
-        invoice = create_invoice(
-            branch=branch,
-            user=request.user,
-            customer=customer,
-            bill_type=bill_type,
-            payment_mode=payment_mode,
-            cart_lines=cart_lines,
-            amount_paid=amount_paid,
-            payment_reference=payload.get("payment_reference", ""),
-        )
+        with transaction.atomic():
+            customer = _resolve_customer(payload)
+            invoice = create_invoice(
+                branch=branch,
+                user=request.user,
+                customer=customer,
+                bill_type=bill_type,
+                payment_mode=payment_mode,
+                cart_lines=cart_lines,
+                amount_paid=amount_paid,
+                payment_reference=payload.get("payment_reference", ""),
+            )
     except InsufficientStockError as exc:
         return JsonResponse({"error": str(exc)}, status=409)
     except (PaymentError, ValueError) as exc:
@@ -98,10 +117,16 @@ def create_invoice_view(request):
     return JsonResponse(
         {
             "invoice_number": invoice.number,
+            "customer": invoice.customer.name if invoice.customer else "Walk-in Customer",
+            "subtotal": _money_string(invoice.subtotal),
+            "cgst": _money_string(invoice.cgst),
+            "sgst": _money_string(invoice.sgst),
+            "tax_amount": _money_string(invoice.tax_amount),
             "total": _money_string(invoice.total),
             "paid_amount": _money_string(invoice.paid_amount),
             "balance_due": _money_string(invoice.balance_due),
             "payment_status": invoice.payment_status,
+            "payment_status_label": invoice.get_payment_status_display(),
             "is_settled": invoice.is_settled,
             "print_url": f"/billing/invoice/{invoice.number}/print/",
         },
@@ -154,18 +179,30 @@ def settlement_list_view(request):
         Invoice.objects.for_branch(request.branch)
         .filter(status=InvoiceStatus.POSTED, payment_status=PaymentStatus.PAID)
         .select_related("customer")
-        .annotate(total_paid=Sum("payments__amount"))
-        .order_by("-invoice_date", "-id")[:100]
+        .annotate(
+            total_paid=Sum("payments__amount"),
+            settled_date=Max("payments__payment_date"),
+        )
+        .order_by("-settled_date", "-id")[:100]
     )
     results = [
         {
             "invoice_number": invoice.number,
             "customer": invoice.customer.name if invoice.customer else "Walk-in Customer",
+            "customer_phone": invoice.customer.phone if invoice.customer else "",
             "invoice_date": invoice.invoice_date.isoformat(),
+            "settled_date": (
+                invoice.settled_date.isoformat() if invoice.settled_date else None
+            ),
+            "bill_type": invoice.bill_type,
+            "payment_mode": invoice.payment_mode,
             "total": _money_string(invoice.total),
             "paid_amount": _money_string(invoice.total_paid or Decimal("0.00")),
             "balance_due": "0.00",
             "payment_status": invoice.payment_status,
+            "print_url": reverse(
+                "invoice-print", kwargs={"number": invoice.number}
+            ),
         }
         for invoice in invoices
     ]

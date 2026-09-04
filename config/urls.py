@@ -4,6 +4,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from apps.billing import views as billing_views
+from apps.billing import workspace_views
 from apps.inventory.api import ProductSearchViewSet
 
 
@@ -19,6 +20,11 @@ urlpatterns = [
     ),
     path("logout/", auth_views.LogoutView.as_view(), name="logout"),
     path("", billing_views.pos_terminal, name="pos-terminal"),
+    path(
+        "billing/workspace/",
+        workspace_views.workspace_data_view,
+        name="billing-workspace",
+    ),
     path(
         "billing/invoice/create/",
         billing_views.create_invoice_view,
@@ -38,6 +44,11 @@ urlpatterns = [
         "billing/settlements/",
         billing_views.settlement_list_view,
         name="settlement-list",
+    ),
+    path(
+        "billing/ledger/expense/",
+        workspace_views.add_expense_view,
+        name="ledger-expense-add",
     ),
     path("api/", include(router.urls)),
 ]

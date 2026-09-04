@@ -1,13 +1,92 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}POS Terminal - Rasheed{% endblock %}
+{% block title %}Rasheed - Billing &amp; Inventory{% endblock %}
+
+{% block body_class %}pos-page{% endblock %}
+
+{% block authenticated_header %}{% endblock %}
 
 {% block content %}
-<div id="pos-root" data-branch="{% if branch %}{{ branch.id }}{% endif %}"></div>
+<div
+  id="pos-root"
+  class="rasheed-app"
+  data-products-url="{% url 'product-search-list' %}"
+  data-workspace-url="{% url 'billing-workspace' %}"
+  data-create-invoice-url="{% url 'invoice-create' %}"
+  data-settlements-url="{% url 'settlement-list' %}"
+  data-expense-url="{% url 'ledger-expense-add' %}"
+>
+  <aside class="sidebar" aria-label="Main navigation">
+    <div class="brand">
+      <div class="brand-mark">Rasheed<span>.</span></div>
+      <div class="brand-sub">Billing &amp; Inventory</div>
+    </div>
+    <nav class="nav">
+      <button type="button" data-view="dashboard" class="active">
+        <span class="nav-icon">&#9635;</span><span>Dashboard</span>
+      </button>
+      <button type="button" data-view="newbill">
+        <span class="nav-icon">&#43;</span><span>New Bill</span>
+      </button>
+      <button type="button" data-view="invoices">
+        <span class="nav-icon">&#9671;</span><span>Invoices</span>
+      </button>
+      <button type="button" data-view="settlements">
+        <span class="nav-icon">&#10003;</span><span>Settlements</span>
+      </button>
+      <button type="button" data-view="ledger">
+        <span class="nav-icon">&#167;</span><span>Ledger</span>
+      </button>
+      <button type="button" data-view="stock">
+        <span class="nav-icon">&#9638;</span><span>Stock</span>
+      </button>
+      <button type="button" data-view="gallery">
+        <span class="nav-icon">&#9636;</span><span>Gallery</span>
+      </button>
+    </nav>
+    <div class="sidebar-foot">
+      {% if branch %}
+        {{ branch.name }}<br>
+        {% if branch.gstin %}GSTIN: {{ branch.gstin }}{% else %}{{ branch.code }}{% endif %}
+      {% else %}
+        Branch setup required
+      {% endif %}
+    </div>
+  </aside>
+
+  <div class="workspace-main">
+    <header class="workspace-topbar">
+      <div>
+        <h1 id="page-title">Dashboard</h1>
+        <div class="store" id="branch-label">
+          {% if branch %}{{ branch.name }}{% else %}No branch assigned{% endif %}
+        </div>
+      </div>
+      <div class="workspace-user">
+        <div>
+          <strong>{{ user.get_username }}</strong>
+          <span>{{ user.get_role_display }}</span>
+        </div>
+        <form method="post" action="{% url 'logout' %}">
+          {% csrf_token %}
+          <button type="submit" class="signout-btn">Sign out</button>
+        </form>
+      </div>
+    </header>
+    <main class="workspace-content" id="app-content">
+      <div class="loading-state">
+        <div class="loader"></div>
+        <p>Loading your billing workspace...</p>
+      </div>
+    </main>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toast-root" aria-live="polite"></div>
 {% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{% static 'css/payment.css' %}">
-<script defer src="{% static 'js/pos.js' %}"></script>
+<link rel="stylesheet" href="{% static 'css/rasheed.css' %}">
+<script defer src="{% static 'js/rasheed-app.js' %}"></script>
 {% endblock %}

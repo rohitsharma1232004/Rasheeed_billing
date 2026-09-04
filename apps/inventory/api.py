@@ -1,4 +1,5 @@
-from django.db.models import OuterRef, Subquery
+from django.db.models import IntegerField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
@@ -22,10 +23,19 @@ class ProductSearchViewSet(viewsets.ReadOnlyModelViewSet):
             Product.objects.filter(is_active=True)
             .select_related("category")
             .prefetch_related("images")
-            .annotate(stock=Subquery(stock_subquery))
+            .annotate(
+                stock=Coalesce(
+                    Subquery(stock_subquery, output_field=IntegerField()),
+                    Value(0),
+                )
+            )
             .order_by("name")
         )
         search = self.request.query_params.get("q")
         if search:
-            queryset = queryset.filter(name__icontains=search)
+            queryset = queryset.filter(
+                Q(name__icontains=search)
+                | Q(sku__icontains=search)
+                | Q(category__name__icontains=search)
+            )
         return queryset

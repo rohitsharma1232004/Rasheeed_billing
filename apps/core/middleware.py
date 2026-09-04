@@ -42,7 +42,7 @@ class SecurityHeadersMiddleware:
         response = self.get_response(request)
         response.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
+            "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'",
         )
         response.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
         response.setdefault("X-Content-Type-Options", "nosniff")
