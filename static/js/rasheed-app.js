@@ -1355,6 +1355,12 @@ function openStockModal(productId) {
           '<div class="modal-field"><label id="stock-quantity-label">Quantity received *</label>' +
             '<input name="quantity_delta" id="stock-quantity" type="number" min="1" step="1" required placeholder="Example: 10">' +
             '<small id="stock-quantity-help">Enter the number of new units received. It will be added to current stock.</small></div>' +
+          '<div class="modal-field" id="stock-payment-field"><label>Payment mode *</label>' +
+            '<select name="payment_mode" id="stock-payment-mode" required>' +
+              state.workspace.choices.payment_modes.map(function (mode) {
+                return '<option value="' + escapeHtml(mode.value) + '">' + escapeHtml(mode.label) + '</option>';
+              }).join("") +
+            '</select><small>Purchase cost is calculated from purchasing price x quantity.</small></div>' +
           '<div class="modal-field"><label>Reference *</label>' +
             '<input name="reference" maxlength="40" required placeholder="Supplier bill or GRN, e.g. GRN-1042">' +
             '<small>This reference makes the stock change traceable later.</small></div>' +
@@ -1366,6 +1372,7 @@ function openStockModal(productId) {
   const quantityInput = document.getElementById("stock-quantity");
   const quantityLabel = document.getElementById("stock-quantity-label");
   const quantityHelp = document.getElementById("stock-quantity-help");
+  const paymentField = document.getElementById("stock-payment-field");
   reasonSelect.addEventListener("change", function () {
     const isPurchase = reasonSelect.value === "PURCHASE";
     quantityLabel.textContent = isPurchase ? "Quantity received *" : "Quantity change (+/-) *";
@@ -1374,6 +1381,8 @@ function openStockModal(productId) {
     quantityHelp.textContent = isPurchase
       ? "Enter new units received; they will be added to current stock."
       : "Use a negative number to remove missing/damaged units, or positive to add counted units.";
+    paymentField.hidden = !isPurchase;
+    document.getElementById("stock-payment-mode").required = isPurchase;
   });
   modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal);
   document.getElementById("stock-form").addEventListener("submit", function (event) {
