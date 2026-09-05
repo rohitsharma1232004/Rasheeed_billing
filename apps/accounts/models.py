@@ -38,7 +38,7 @@ class User(AbstractUser):
         return access.branch if access else None
  
     def can_void_invoice(self):
-        return self.role in (Role.OWNER, Role.MANAGER)
+        return self.is_superuser or self.role in (Role.OWNER, Role.MANAGER)
  
     def can_export_ledger(self):
         return self.role in (Role.OWNER, Role.MANAGER, Role.AUDITOR)

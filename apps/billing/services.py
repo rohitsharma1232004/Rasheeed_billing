@@ -6,7 +6,8 @@ from django.utils import timezone
 
 from apps.inventory.models import StockMovement
 from apps.inventory.services import adjust_stock
-from apps.ledger.services import post_income
+from apps.ledger.models import ExpenseCategory
+from apps.ledger.services import post_expense, post_income
 
 from .models import (
     BillType,
@@ -267,14 +268,37 @@ def create_invoice(
 
 
 @transaction.atomic
-def void_invoice(*, invoice, user, reason):
-    """Return sold stock and mark the immutable posted invoice as void."""
+def void_invoice(*, invoice, user, reason, refund_confirmed=False):
+    """Atomically reverse stock and money while retaining the original audit trail."""
     if not user.can_void_invoice():
         raise PermissionError("Not authorised to void invoices")
+    if not invoice.pk:
+        raise ValueError("Save the invoice before voiding it")
+
+    reason = " ".join(str(reason or "").split())
+    if len(reason) < 5:
+        raise ValueError("Enter a clear void reason of at least 5 characters")
+    if len(reason) > 200:
+        raise ValueError("Void reason cannot exceed 200 characters")
 
     locked_invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
     if locked_invoice.status == InvoiceStatus.VOID:
         raise ValueError("Invoice is already void")
+    if locked_invoice.status != InvoiceStatus.POSTED:
+        raise ValueError("Only a posted invoice can be voided")
+
+    payments = list(
+        Payment.objects.select_for_update()
+        .filter(invoice=locked_invoice)
+        .order_by("id")
+    )
+    paid_total = sum(
+        (payment.amount for payment in payments), Decimal("0.00")
+    )
+    if paid_total > 0 and not refund_confirmed:
+        raise ValueError(
+            f"Confirm that {_money(paid_total)} received for this invoice has been refunded"
+        )
 
     for item in locked_invoice.items.select_related("product"):
         adjust_stock(
@@ -286,10 +310,36 @@ def void_invoice(*, invoice, user, reason):
             user=user,
         )
 
+    for payment in payments:
+        post_expense(
+            branch=locked_invoice.branch,
+            amount=payment.amount,
+            mode=payment.payment_mode,
+            category=ExpenseCategory.SALES,
+            description=(
+                f"Refund of {payment.get_payment_type_display().lower()} "
+                f"payment for void invoice {locked_invoice.number}"
+            ),
+            reference=locked_invoice.number,
+            user=user,
+        )
+
     locked_invoice.status = InvoiceStatus.VOID
     locked_invoice.voided_by = user
+    locked_invoice.voided_at = timezone.now()
     locked_invoice.void_reason = reason
     locked_invoice.save(
-        update_fields=["status", "voided_by", "void_reason", "updated_at"]
+        update_fields=[
+            "status",
+            "voided_by",
+            "voided_at",
+            "void_reason",
+            "updated_at",
+        ]
     )
+
+    invoice.status = locked_invoice.status
+    invoice.voided_by = locked_invoice.voided_by
+    invoice.voided_at = locked_invoice.voided_at
+    invoice.void_reason = locked_invoice.void_reason
     return locked_invoice

@@ -5,6 +5,7 @@ from django.db.models import (
     Count,
     DecimalField,
     F,
+    IntegerField,
     OuterRef,
     Q,
     Subquery,
@@ -18,7 +19,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.accounts.models import Role
-from apps.inventory.models import StockBalance
+from apps.inventory.models import Product, StockBalance
 from apps.ledger.models import EntryType, ExpenseCategory, LedgerEntry
 from apps.ledger.services import post_expense
 
@@ -57,21 +58,30 @@ def _invoice_paid_annotation():
     )
 
 
-def _invoice_queryset(branch):
-    return (
+def _invoice_queryset(branch, *, include_void=False):
+    queryset = (
         Invoice.objects.for_branch(branch)
-        .filter(status=InvoiceStatus.POSTED)
-        .select_related("customer", "branch")
+        .select_related("customer", "branch", "voided_by")
         .annotate(
             paid_total=_invoice_paid_annotation(),
             item_count=Count("items", distinct=True),
         )
     )
+    if include_void:
+        return queryset.filter(
+            status__in=(InvoiceStatus.POSTED, InvoiceStatus.VOID)
+        )
+    return queryset.filter(status=InvoiceStatus.POSTED)
 
 
 def _invoice_payload(invoice):
     paid = Decimal(getattr(invoice, "paid_total", Decimal("0.00")) or 0)
-    balance = max(Decimal("0.00"), invoice.total - paid)
+    is_void = invoice.status == InvoiceStatus.VOID
+    balance = (
+        Decimal("0.00")
+        if is_void
+        else max(Decimal("0.00"), invoice.total - paid)
+    )
     is_settled = (
         invoice.status != InvoiceStatus.VOID
         and invoice.payment_status == PaymentStatus.PAID
@@ -95,11 +105,23 @@ def _invoice_payload(invoice):
         "balance_due": _money_string(balance),
         "payment_status": invoice.payment_status,
         "payment_status_label": invoice.get_payment_status_display(),
+        "invoice_status": invoice.status,
+        "invoice_status_label": invoice.get_status_display(),
+        "is_void": is_void,
+        "void_reason": invoice.void_reason,
+        "voided_at": invoice.voided_at.isoformat() if invoice.voided_at else None,
+        "voided_by": (
+            invoice.voided_by.get_username() if invoice.voided_by else ""
+        ),
+        "refunded_amount": _money_string(paid if is_void else Decimal("0.00")),
         "is_settled": is_settled,
         "payment_url": reverse(
             "invoice-payment-add", kwargs={"number": invoice.number}
         ),
         "print_url": reverse("invoice-print", kwargs={"number": invoice.number}),
+        "void_url": reverse(
+            "invoice-void", kwargs={"number": invoice.number}
+        ),
     }
 
 
@@ -115,7 +137,9 @@ def workspace_data_view(request):
         status=InvoiceStatus.POSTED
     )
     invoice_rows = list(
-        _invoice_queryset(branch).order_by("-invoice_date", "-id")[:100]
+        _invoice_queryset(branch, include_void=True).order_by(
+            "-invoice_date", "-id"
+        )[:100]
     )
 
     today_billed = invoice_base.filter(invoice_date=today).aggregate(
@@ -140,11 +164,20 @@ def workspace_data_view(request):
         Decimal("0.00"),
     )
 
-    low_stock_count = StockBalance.objects.filter(
-        branch=branch,
-        product__is_active=True,
-        quantity__lte=F("product__reorder_level"),
-    ).count()
+    product_stock = StockBalance.objects.filter(
+        branch=branch, product=OuterRef("pk")
+    ).values("quantity")[:1]
+    low_stock_count = (
+        Product.objects.filter(is_active=True)
+        .annotate(
+            branch_stock=Coalesce(
+                Subquery(product_stock, output_field=IntegerField()),
+                Value(0),
+            )
+        )
+        .filter(branch_stock__lte=F("reorder_level"))
+        .count()
+    )
 
     ledger_base = LedgerEntry.objects.for_branch(branch)
     ledger_totals = ledger_base.aggregate(
@@ -214,6 +247,7 @@ def workspace_data_view(request):
             "invoices": [_invoice_payload(invoice) for invoice in invoice_rows],
             "ledger_entries": ledger_entries,
             "can_add_expense": request.user.role != Role.AUDITOR,
+            "can_void_invoice": request.user.can_void_invoice(),
             "choices": {
                 "payment_modes": [
                     {"value": value, "label": label}

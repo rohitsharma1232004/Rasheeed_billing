@@ -11,6 +11,9 @@ const endpoints = {
   createInvoice: root.dataset.createInvoiceUrl,
   settlements: root.dataset.settlementsUrl,
   expense: root.dataset.expenseUrl,
+  inventory: root.dataset.inventoryUrl,
+  saveProduct: root.dataset.productSaveUrl,
+  adjustStockTemplate: root.dataset.stockAdjustUrlTemplate,
 };
 
 const viewTitles = {
@@ -28,6 +31,7 @@ const state = {
   products: [],
   workspace: null,
   settlements: [],
+  inventory: null,
   cart: {},
   billType: "GST",
   paymentType: "FULL",
@@ -37,6 +41,8 @@ const state = {
   customerPhone: "",
   searchTerm: "",
   invoiceFilter: "ALL",
+  inventoryFilter: "ACTIVE",
+  inventorySearch: "",
   galleryAngles: {},
   busy: false,
 };
@@ -77,6 +83,19 @@ function displayDate(value) {
     day: "2-digit",
     month: "short",
     year: "numeric",
+  });
+}
+
+function displayDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  return date.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -175,10 +194,12 @@ async function refreshWorkspace(renderAfter) {
     fetchAllProducts(),
     apiFetch(endpoints.workspace),
     apiFetch(endpoints.settlements),
+    apiFetch(endpoints.inventory),
   ]);
   state.products = results[0];
   state.workspace = results[1];
   state.settlements = results[2].results || [];
+  state.inventory = results[3];
   refreshCartProducts();
 
   const branch = state.workspace.branch;
@@ -226,6 +247,7 @@ function statusTag(status, label) {
   let cssClass = "unpaid";
   if (status === "PAID") cssClass = "paid";
   if (status === "PARTIALLY_PAID") cssClass = "partial";
+  if (status === "VOID") cssClass = "void";
   return '<span class="tag ' + cssClass + '">' + escapeHtml(label || status) + "</span>";
 }
 
@@ -262,7 +284,10 @@ function renderDashboard() {
           "<td>" + escapeHtml(invoice.customer) +
           '<span class="invoice-customer">' + invoice.item_count + " item(s)</span></td>" +
           "<td>" + billTag(invoice.bill_type) + "</td>" +
-          "<td>" + statusTag(invoice.payment_status, invoice.payment_status_label) + "</td>" +
+          "<td>" + statusTag(
+            invoice.is_void ? "VOID" : invoice.payment_status,
+            invoice.is_void ? "Void" : invoice.payment_status_label
+          ) + "</td>" +
           '<td class="mono">' + money(invoice.total) + "</td>" +
           "</tr>"
         );
@@ -655,14 +680,20 @@ function closeModal() {
 
 function renderInvoices() {
   const invoices = state.workspace.invoices.filter(function (invoice) {
-    if (state.invoiceFilter === "OUTSTANDING") return !invoice.is_settled;
-    if (state.invoiceFilter === "PAID") return invoice.is_settled;
+    if (state.invoiceFilter === "OUTSTANDING") {
+      return !invoice.is_void && !invoice.is_settled;
+    }
+    if (state.invoiceFilter === "PAID") {
+      return !invoice.is_void && invoice.is_settled;
+    }
+    if (state.invoiceFilter === "VOID") return invoice.is_void;
     return true;
   });
   const filters = [
     ["ALL", "All invoices"],
     ["OUTSTANDING", "Outstanding"],
     ["PAID", "Fully paid"],
+    ["VOID", "Void"],
   ].map(function (filter) {
     return (
       '<button type="button" class="filter-btn' +
@@ -676,21 +707,31 @@ function renderInvoices() {
         const action =
           '<a class="pill-btn ghost small" href="' + escapeHtml(invoice.print_url) +
           '" target="_blank" rel="noopener">Print</a>' +
-          (!invoice.is_settled
+          (!invoice.is_void && !invoice.is_settled
             ? '<button type="button" class="pill-btn primary small" data-collect-balance="' +
               escapeHtml(invoice.number) + '">Collect balance</button>'
+            : "") +
+          (state.workspace.can_void_invoice && !invoice.is_void
+            ? '<button type="button" class="pill-btn danger small" data-void-invoice="' +
+              escapeHtml(invoice.number) + '">Void</button>'
             : "");
+        const status = invoice.is_void
+          ? statusTag("VOID", "Void")
+          : statusTag(invoice.payment_status, invoice.payment_status_label);
+        const amountNote = invoice.is_void
+          ? "Refunded " + money(invoice.refunded_amount)
+          : "Due " + money(invoice.balance_due);
         return (
-          "<tr>" +
+          '<tr class="' + (invoice.is_void ? "voided-row" : "") + '">' +
           '<td><strong class="mono">' + escapeHtml(invoice.number) + "</strong>" +
           '<span class="invoice-customer">' + escapeHtml(invoice.customer) +
           (invoice.customer_phone ? " &middot; " + escapeHtml(invoice.customer_phone) : "") +
           "</span></td>" +
           "<td>" + displayDate(invoice.invoice_date) + "</td>" +
           "<td>" + billTag(invoice.bill_type) + "</td>" +
-          "<td>" + statusTag(invoice.payment_status, invoice.payment_status_label) + "</td>" +
+          "<td>" + status + "</td>" +
           '<td class="amount-stack mono"><strong>' + money(invoice.total) +
-          '</strong><small>Due ' + money(invoice.balance_due) + "</small></td>" +
+          "</strong><small>" + amountNote + "</small></td>" +
           '<td><div class="table-actions">' + action + "</div></td>" +
           "</tr>"
         );
@@ -717,6 +758,14 @@ function renderInvoices() {
         return item.number === button.dataset.collectBalance;
       });
       if (invoice) showPaymentModal(invoice);
+    });
+  });
+  document.querySelectorAll("[data-void-invoice]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      const invoice = state.workspace.invoices.find(function (item) {
+        return item.number === button.dataset.voidInvoice;
+      });
+      if (invoice) showVoidInvoiceModal(invoice);
     });
   });
 }
@@ -818,6 +867,80 @@ async function submitBalancePayment(invoice) {
   }
 }
 
+function showVoidInvoiceModal(invoice) {
+  const paidAmount = Number(invoice.paid_amount || 0);
+  const refundConfirmation = paidAmount > 0
+    ? '<label class="confirm-check"><input id="void-refund-confirmed" type="checkbox" required>' +
+        '<span>I confirm that <strong>' + money(paidAmount) +
+        "</strong> has been refunded to the customer. Matching refund entries will be added to the ledger.</span></label>"
+    : '<div class="flow-note compact">No payment was received, so no money refund entry is required.</div>';
+
+  modalRoot.innerHTML =
+    '<div class="modal-overlay" role="dialog" aria-modal="true">' +
+      '<div class="modal-card">' +
+        '<div class="modal-head danger-head"><h3>Void invoice</h3><p>' +
+          escapeHtml(invoice.number) + " &middot; " + escapeHtml(invoice.customer) + "</p></div>" +
+        '<form id="void-invoice-form"><div class="modal-body">' +
+          '<div class="payment-summary-box" style="margin-top:0;margin-bottom:16px">' +
+            '<div class="payment-summary-row"><span>Invoice total</span><strong>' +
+              money(invoice.total) + "</strong></div>" +
+            '<div class="payment-summary-row"><span>Amount received</span><strong>' +
+              money(invoice.paid_amount) + "</strong></div>" +
+            '<div class="payment-summary-row"><span>Balance before void</span><strong>' +
+              money(invoice.balance_due) + "</strong></div></div>" +
+          '<div class="void-warning"><strong>This action cannot be undone.</strong>' +
+            "<ul><li>Sold item quantities will return to branch stock.</li>" +
+            "<li>The original invoice and payments remain in audit history.</li>" +
+            (paidAmount > 0
+              ? "<li>Received money will be recorded as a sales refund in the ledger.</li>"
+              : "") +
+            "</ul></div>" +
+          '<div class="modal-field"><label for="void-reason">Cancellation reason *</label>' +
+            '<textarea id="void-reason" minlength="5" maxlength="200" required ' +
+              'placeholder="Example: Customer cancelled before delivery"></textarea></div>' +
+          refundConfirmation +
+        '</div><div class="modal-actions"><button type="button" data-close-modal>Keep invoice</button>' +
+          '<button type="submit" class="danger" id="confirm-void-invoice">Void invoice</button></div>' +
+        "</form></div></div>";
+
+  modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal);
+  document.getElementById("void-invoice-form").addEventListener("submit", function (event) {
+    submitVoidInvoice(event, invoice, paidAmount);
+  });
+  document.getElementById("void-reason").focus();
+}
+
+async function submitVoidInvoice(event, invoice, paidAmount) {
+  event.preventDefault();
+  const button = document.getElementById("confirm-void-invoice");
+  const refundCheckbox = document.getElementById("void-refund-confirmed");
+  const payload = new URLSearchParams();
+  payload.append("reason", document.getElementById("void-reason").value.trim());
+  payload.append(
+    "refund_confirmed",
+    refundCheckbox && refundCheckbox.checked ? "1" : "0"
+  );
+  button.disabled = true;
+  button.textContent = "Voiding...";
+  try {
+    const result = await apiFetch(invoice.void_url, {
+      method: "POST",
+      body: payload,
+    });
+    await refreshWorkspace(false);
+    closeModal();
+    renderInvoices();
+    showToast(
+      "Invoice " + result.invoice_number + " voided. Stock restored" +
+      (paidAmount > 0 ? " and " + money(result.refunded_amount) + " refund recorded." : ".")
+    );
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Void invoice";
+    showToast(error.message, true);
+  }
+}
+
 function renderLedger() {
   const summary = state.workspace.summary;
   const entries = state.workspace.ledger_entries;
@@ -903,34 +1026,383 @@ async function submitExpense() {
   }
 }
 
+function filteredInventoryProducts() {
+  if (!state.inventory) return [];
+  const search = state.inventorySearch.trim().toLowerCase();
+  return state.inventory.products.filter(function (product) {
+    const matchesSearch =
+      !search ||
+      String(product.name).toLowerCase().includes(search) ||
+      String(product.sku).toLowerCase().includes(search) ||
+      String(product.category).toLowerCase().includes(search);
+    if (!matchesSearch) return false;
+    if (state.inventoryFilter === "ACTIVE") return product.is_active;
+    if (state.inventoryFilter === "LOW") return product.is_low_stock;
+    if (state.inventoryFilter === "OUT") {
+      return product.is_active && Number(product.stock) === 0;
+    }
+    if (state.inventoryFilter === "INACTIVE") return !product.is_active;
+    return true;
+  });
+}
+
+function inventoryStockTag(product) {
+  if (!product.is_active) return '<span class="tag mode">Inactive</span>';
+  const stock = Number(product.stock || 0);
+  if (stock === 0) return '<span class="tag low">Out of stock</span>';
+  if (product.is_low_stock) return '<span class="tag partial">Low stock</span>';
+  return '<span class="tag ok">In stock</span>';
+}
+
+function inventoryMovementRows() {
+  const movements = state.inventory ? state.inventory.movements : [];
+  if (!movements.length) {
+    return '<tr><td colspan="7"><div class="empty-state">No stock movement has been recorded yet.</div></td></tr>';
+  }
+  return movements.map(function (movement) {
+    const delta = Number(movement.quantity_delta);
+    return (
+      "<tr>" +
+      "<td>" + displayDateTime(movement.created_at) + "</td>" +
+      "<td><strong>" + escapeHtml(movement.product) +
+        '</strong><span class="invoice-customer">' + escapeHtml(movement.sku) + "</span></td>" +
+      "<td>" + escapeHtml(movement.reason_label) + "</td>" +
+      '<td class="mono movement-delta ' + (delta > 0 ? "in" : "out") + '">' +
+        (delta > 0 ? "+" : "") + delta + "</td>" +
+      '<td class="mono">' + movement.balance_after + "</td>" +
+      '<td class="mono">' + escapeHtml(movement.reference) + "</td>" +
+      "<td>" + escapeHtml(movement.created_by) + "</td>" +
+      "</tr>"
+    );
+  }).join("");
+}
+
+function inventoryProductRows(products, canManage) {
+  if (!products.length) {
+    return '<tr><td colspan="' + (canManage ? "8" : "7") +
+      '"><div class="empty-state">No products match this filter.</div></td></tr>';
+  }
+  return products.map(function (product) {
+    const managementActions = canManage
+      ? '<div class="inventory-actions">' +
+          '<button type="button" class="pill-btn ghost small" data-edit-product="' +
+            product.id + '">Edit</button>' +
+          '<button type="button" class="pill-btn primary small" data-adjust-stock="' +
+            product.id + '">Stock</button>' +
+        "</div>"
+      : '<span class="readonly-label">View only</span>';
+    const costCell = canManage
+      ? '<td class="mono">' + money(product.purchasing_price) + "</td>"
+      : "";
+    return (
+      '<tr class="' + (product.is_active ? "" : "inactive-row") + '">' +
+      "<td><strong>" + escapeHtml(product.name) +
+        '</strong><span class="invoice-customer">' + escapeHtml(product.sku) +
+        (product.is_new_arrival ? " &middot; New arrival" : "") + "</span></td>" +
+      "<td>" + escapeHtml(product.category) + "</td>" +
+      '<td class="mono">' + escapeHtml(product.hsn_code || "-") + "</td>" +
+      costCell +
+      '<td class="mono">' + money(product.price) + "</td>" +
+      '<td class="mono"><strong>' + Number(product.stock || 0) +
+        '</strong><span class="invoice-customer">Reorder at ' +
+        Number(product.reorder_level || 0) + "</span></td>" +
+      "<td>" + inventoryStockTag(product) + "</td>" +
+      "<td>" + managementActions + "</td>" +
+      "</tr>"
+    );
+  }).join("");
+}
+
 function renderStock() {
-  const rows = state.products.length
-    ? state.products.map(function (product) {
-        const stock = Number(product.stock || 0);
-        const reorder = Number(product.reorder_level || 0);
-        const isLow = stock <= reorder;
-        return (
-          "<tr>" +
-          "<td><strong>" + escapeHtml(product.name) + '</strong><span class="invoice-customer">' +
-          escapeHtml(product.sku) + "</span></td>" +
-          "<td>" + escapeHtml(product.category) + "</td>" +
-          '<td class="mono">' + escapeHtml(product.hsn_code || "-") + "</td>" +
-          '<td class="mono">' + money(product.price) + "</td>" +
-          '<td class="mono"><strong>' + stock + "</strong></td>" +
-          '<td><span class="tag ' + (isLow ? "low" : "ok") + '">' +
-          (stock === 0 ? "Out of stock" : isLow ? "Low stock" : "In stock") +
-          "</span></td>" +
-          "</tr>"
-        );
-      }).join("")
-    : '<tr><td colspan="6"><div class="empty-state">No products have been added.</div></td></tr>';
+  if (!state.inventory) {
+    showLoading("Loading inventory...");
+    return;
+  }
+  const canManage = state.inventory.can_manage;
+  const summary = state.inventory.summary;
+  const products = filteredInventoryProducts();
+  const filters = [
+    ["ACTIVE", "Active"],
+    ["LOW", "Low stock"],
+    ["OUT", "Out of stock"],
+    ["INACTIVE", "Inactive"],
+    ["ALL", "All"],
+  ].map(function (filter) {
+    return '<button type="button" class="filter-btn' +
+      (state.inventoryFilter === filter[0] ? " active" : "") +
+      '" data-inventory-filter="' + filter[0] + '">' + filter[1] + "</button>";
+  }).join("");
+  const addButton = canManage
+    ? '<button type="button" class="pill-btn primary" id="add-product">+ Add product</button>'
+    : '<span class="tag mode">Read-only access</span>';
+  const costHeader = canManage ? "<th>Purchase cost</th>" : "";
+  const fourthStat = canManage
+    ? '<div class="stat-card"><div class="label">Stock Cost Value</div><div class="value">' +
+        money(summary.stock_cost_value) +
+        '</div><div class="sub">Purchase cost x available quantity</div></div>'
+    : '<div class="stat-card"><div class="label">Out of Stock</div><div class="value">' +
+        summary.out_of_stock_products +
+        '</div><div class="sub">Active products with zero quantity</div></div>';
 
   content.innerHTML =
-    '<div class="flow-note">These are live branch quantities. Every posted invoice deducts stock in the same database transaction; a failed checkout does not reduce stock.</div>' +
+    '<div class="section-heading"><div><h2 class="section-title">Product &amp; Inventory</h2>' +
+      '<p class="section-sub">Catalogue is shared; quantities and movement history belong to ' +
+      escapeHtml(state.inventory.branch.name) + ".</p></div>" + addButton + "</div>" +
+    '<div class="flow-note"><strong>Stock rule:</strong> Bills reduce stock automatically. Use Stock In for purchases and Manual Adjustment only after a physical count. Every change creates an audit entry.</div>' +
+    '<div class="stat-row">' +
+      '<div class="stat-card"><div class="label">Active Products</div><div class="value">' +
+        summary.active_products + '</div><div class="sub">' + summary.inactive_products +
+        " inactive product(s)</div></div>" +
+      '<div class="stat-card good"><div class="label">Units Available</div><div class="value">' +
+        summary.stock_units + '</div><div class="sub">Across active products</div></div>' +
+      '<div class="stat-card ' + (summary.low_stock_products ? "alert" : "good") +
+        '"><div class="label">Low Stock</div><div class="value">' +
+        summary.low_stock_products + '</div><div class="sub">' +
+        summary.out_of_stock_products + " completely out of stock</div></div>" +
+      fourthStat +
+    "</div>" +
+    '<div class="inventory-toolbar"><input id="inventory-search" type="search" autocomplete="off" ' +
+      'placeholder="Search product, SKU or category..." value="' +
+      escapeHtml(state.inventorySearch) + '"><div class="filter-row">' + filters + "</div></div>" +
     '<div class="panel"><div class="panel-head"><h3>Furniture Stock</h3><span class="tag mode">' +
-      state.products.length + " products</span></div>" +
-      '<div class="table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>HSN</th><th>Selling price</th><th>Qty</th><th>Status</th></tr></thead>' +
-      "<tbody>" + rows + "</tbody></table></div></div>";
+      products.length + " shown</span></div>" +
+      '<div class="table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>HSN</th>' +
+      costHeader + "<th>Selling price</th><th>Quantity</th><th>Status</th><th>Actions</th></tr></thead><tbody>" +
+      inventoryProductRows(products, canManage) + "</tbody></table></div></div>" +
+    '<div class="panel"><div class="panel-head"><h3>Recent Stock Movements</h3>' +
+      '<span class="tag mode">Latest 100</span></div><div class="table-wrap">' +
+      '<table><thead><tr><th>Date &amp; time</th><th>Product</th><th>Reason</th><th>Change</th>' +
+      '<th>Balance</th><th>Reference</th><th>By</th></tr></thead><tbody>' +
+      inventoryMovementRows() + "</tbody></table></div></div>";
+
+  document.getElementById("inventory-search").addEventListener("input", function (event) {
+    state.inventorySearch = event.target.value;
+    renderStock();
+    const searchInput = document.getElementById("inventory-search");
+    searchInput.focus();
+    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+  });
+  document.querySelectorAll("[data-inventory-filter]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      state.inventoryFilter = button.dataset.inventoryFilter;
+      renderStock();
+    });
+  });
+  if (canManage) {
+    document.getElementById("add-product").addEventListener("click", function () {
+      openProductModal();
+    });
+    document.querySelectorAll("[data-edit-product]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        openProductModal(button.dataset.editProduct);
+      });
+    });
+    document.querySelectorAll("[data-adjust-stock]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        openStockModal(button.dataset.adjustStock);
+      });
+    });
+  }
+}
+
+function inventoryProductById(productId) {
+  if (!state.inventory) return null;
+  return state.inventory.products.find(function (product) {
+    return String(product.id) === String(productId);
+  }) || null;
+}
+
+function productImageUrl(product, angle) {
+  if (!product) return "";
+  const image = (product.images || []).find(function (item) {
+    return item.angle === angle;
+  });
+  return image ? image.image_url : "";
+}
+
+function openProductModal(productId) {
+  const product = productId ? inventoryProductById(productId) : null;
+  if (productId && !product) {
+    showToast("Product was not found.", true);
+    return;
+  }
+  const categoryOptions = state.inventory.categories.map(function (category) {
+    return '<option value="' + escapeHtml(category.name) + '"></option>';
+  }).join("");
+  const title = product ? "Edit product" : "Add product";
+  const subtitle = product
+    ? "Update catalogue details or deactivate this item."
+    : "Create the catalogue item first, then receive its opening stock.";
+
+  modalRoot.innerHTML =
+    '<div class="modal-overlay" role="dialog" aria-modal="true">' +
+      '<div class="modal-card wide">' +
+        '<div class="modal-head"><h3>' + title + "</h3><p>" + subtitle + "</p></div>" +
+        '<form id="product-form">' +
+          '<div class="modal-body"><input type="hidden" name="product_id" value="' +
+            (product ? product.id : "") + '">' +
+            '<div class="modal-grid">' +
+              '<div class="modal-field span-2"><label>Product name *</label>' +
+                '<input name="name" maxlength="200" required value="' +
+                escapeHtml(product ? product.name : "") + '" placeholder="Example: Teakwood Dining Table"></div>' +
+              '<div class="modal-field"><label>SKU *</label>' +
+                '<input name="sku" maxlength="30" required value="' +
+                escapeHtml(product ? product.sku : "") + '" placeholder="DIN-TEAK-6"></div>' +
+              '<div class="modal-field"><label>Category *</label>' +
+                '<input name="category" maxlength="80" list="category-options" required value="' +
+                escapeHtml(product ? product.category : "") +
+                '" placeholder="Select or type a new category"><datalist id="category-options">' +
+                categoryOptions + "</datalist></div>" +
+              '<div class="modal-field"><label>HSN code</label>' +
+                '<input name="hsn_code" maxlength="8" value="' +
+                escapeHtml(product ? product.hsn_code : "") + '" placeholder="9403"></div>' +
+              '<div class="modal-field"><label>GST rate (%) *</label>' +
+                '<input name="gst_rate" type="number" min="0" max="99.99" step="0.01" required value="' +
+                escapeHtml(product ? product.gst_rate : "18.00") + '"></div>' +
+              '<div class="modal-field"><label>Purchasing price *</label>' +
+                '<input name="purchasing_price" type="number" min="0" step="0.01" required value="' +
+                escapeHtml(product ? product.purchasing_price : "0.00") + '"></div>' +
+              '<div class="modal-field"><label>Selling price *</label>' +
+                '<input name="price" type="number" min="0.01" step="0.01" required value="' +
+                escapeHtml(product ? product.price : "") + '"></div>' +
+              '<div class="modal-field"><label>Low-stock level *</label>' +
+                '<input name="reorder_level" type="number" min="0" step="1" required value="' +
+                escapeHtml(product ? product.reorder_level : "5") + '"></div>' +
+              '<div class="checkbox-panel span-2">' +
+                '<label><input name="is_new_arrival" type="checkbox"' +
+                  (product && product.is_new_arrival ? " checked" : "") +
+                  '> Show as new arrival</label>' +
+                '<label><input name="is_active" type="checkbox"' +
+                  (!product || product.is_active ? " checked" : "") +
+                  '> Active and available for billing</label></div>' +
+            "</div>" +
+            '<details class="image-url-section"><summary>Product images (optional)</summary>' +
+              '<p>Use public HTTPS image links. One image can be stored for each angle.</p>' +
+              '<div class="modal-grid">' +
+                '<div class="modal-field"><label>Front image URL</label><input name="image_front" type="url" value="' +
+                  escapeHtml(productImageUrl(product, "FRONT")) + '"></div>' +
+                '<div class="modal-field"><label>Side image URL</label><input name="image_side" type="url" value="' +
+                  escapeHtml(productImageUrl(product, "SIDE")) + '"></div>' +
+                '<div class="modal-field"><label>Back image URL</label><input name="image_back" type="url" value="' +
+                  escapeHtml(productImageUrl(product, "BACK")) + '"></div>' +
+                '<div class="modal-field"><label>Detail image URL</label><input name="image_detail" type="url" value="' +
+                  escapeHtml(productImageUrl(product, "DETAIL")) + '"></div>' +
+              "</div></details></div>" +
+          '<div class="modal-actions"><button type="button" data-close-modal>Cancel</button>' +
+            '<button type="submit" class="primary" id="save-product">' +
+              (product ? "Save changes" : "Create product") + "</button></div>" +
+        "</form></div></div>";
+
+  modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal);
+  document.getElementById("product-form").addEventListener("submit", submitProductForm);
+  document.querySelector('#product-form input[name="name"]').focus();
+}
+
+async function submitProductForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = document.getElementById("save-product");
+  const payload = new URLSearchParams(new FormData(form));
+  payload.set(
+    "is_new_arrival",
+    form.elements.is_new_arrival.checked ? "1" : "0"
+  );
+  payload.set("is_active", form.elements.is_active.checked ? "1" : "0");
+  button.disabled = true;
+  button.textContent = "Saving...";
+  try {
+    const result = await apiFetch(endpoints.saveProduct, {
+      method: "POST",
+      body: payload,
+    });
+    await refreshWorkspace(false);
+    closeModal();
+    renderStock();
+    showToast(result.message + ". Stock quantity is branch-specific.");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = payload.get("product_id") ? "Save changes" : "Create product";
+    showToast(error.message, true);
+  }
+}
+
+function stockAdjustmentUrl(productId) {
+  return endpoints.adjustStockTemplate.replace(
+    "/0/stock/",
+    "/" + encodeURIComponent(productId) + "/stock/"
+  );
+}
+
+function openStockModal(productId) {
+  const product = inventoryProductById(productId);
+  if (!product) {
+    showToast("Product was not found.", true);
+    return;
+  }
+  modalRoot.innerHTML =
+    '<div class="modal-overlay" role="dialog" aria-modal="true">' +
+      '<div class="modal-card">' +
+        '<div class="modal-head"><h3>Update stock</h3><p>' +
+          escapeHtml(product.name) + " &middot; " + escapeHtml(product.sku) + "</p></div>" +
+        '<form id="stock-form"><div class="modal-body">' +
+          '<div class="stock-current"><span>Current branch quantity</span><strong>' +
+            Number(product.stock || 0) + "</strong></div>" +
+          '<div class="modal-field"><label>Operation *</label>' +
+            '<select name="reason" id="stock-reason" required>' +
+              '<option value="PURCHASE">Stock In - purchase / goods received</option>' +
+              '<option value="ADJUSTMENT">Manual adjustment - physical count correction</option>' +
+            "</select></div>" +
+          '<div class="modal-field"><label id="stock-quantity-label">Quantity received *</label>' +
+            '<input name="quantity_delta" id="stock-quantity" type="number" min="1" step="1" required placeholder="Example: 10">' +
+            '<small id="stock-quantity-help">Enter the number of new units received. It will be added to current stock.</small></div>' +
+          '<div class="modal-field"><label>Reference *</label>' +
+            '<input name="reference" maxlength="40" required placeholder="Supplier bill or GRN, e.g. GRN-1042">' +
+            '<small>This reference makes the stock change traceable later.</small></div>' +
+        '</div><div class="modal-actions"><button type="button" data-close-modal>Cancel</button>' +
+          '<button type="submit" class="primary" id="save-stock">Save stock</button></div>' +
+        "</form></div></div>";
+
+  const reasonSelect = document.getElementById("stock-reason");
+  const quantityInput = document.getElementById("stock-quantity");
+  const quantityLabel = document.getElementById("stock-quantity-label");
+  const quantityHelp = document.getElementById("stock-quantity-help");
+  reasonSelect.addEventListener("change", function () {
+    const isPurchase = reasonSelect.value === "PURCHASE";
+    quantityLabel.textContent = isPurchase ? "Quantity received *" : "Quantity change (+/-) *";
+    quantityInput.min = isPurchase ? "1" : "";
+    quantityInput.placeholder = isPurchase ? "Example: 10" : "Example: -2 or 3";
+    quantityHelp.textContent = isPurchase
+      ? "Enter new units received; they will be added to current stock."
+      : "Use a negative number to remove missing/damaged units, or positive to add counted units.";
+  });
+  modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal);
+  document.getElementById("stock-form").addEventListener("submit", function (event) {
+    submitStockAdjustment(event, product);
+  });
+  quantityInput.focus();
+}
+
+async function submitStockAdjustment(event, product) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = document.getElementById("save-stock");
+  const payload = new URLSearchParams(new FormData(form));
+  button.disabled = true;
+  button.textContent = "Saving...";
+  try {
+    const result = await apiFetch(stockAdjustmentUrl(product.id), {
+      method: "POST",
+      body: payload,
+    });
+    await refreshWorkspace(false);
+    closeModal();
+    renderStock();
+    showToast("Stock saved. New balance: " + result.stock + ".");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Save stock";
+    showToast(error.message, true);
+  }
 }
 
 const galleryAngles = [

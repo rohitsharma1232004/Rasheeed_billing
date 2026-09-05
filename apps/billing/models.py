@@ -113,6 +113,7 @@ class Invoice(BranchOwnedModel):
         blank=True,
         related_name="+",
     )
+    voided_at = models.DateTimeField(null=True, blank=True)
     void_reason = models.CharField(max_length=200, blank=True)
 
     class Meta:
@@ -134,7 +135,13 @@ class Invoice(BranchOwnedModel):
 
     @property
     def balance_due(self):
+        if self.status == InvoiceStatus.VOID:
+            return Decimal("0.00")
         return max(Decimal("0.00"), self.total - self.paid_amount)
+
+    @property
+    def refunded_amount(self):
+        return self.paid_amount if self.status == InvoiceStatus.VOID else Decimal("0.00")
 
     @property
     def is_settled(self):

@@ -74,6 +74,19 @@ class WorkspaceViewTests(TestCase):
         self.assertEqual(product["stock"], 5)
         self.assertEqual(product["reorder_level"], 2)
 
+    def test_dashboard_low_stock_includes_product_without_balance_row(self):
+        Product.objects.create(
+            name="Unreceived Chair",
+            sku="CHAIR-NO-BALANCE",
+            category=self.product.category,
+            price=Decimal("2500.00"),
+            reorder_level=1,
+        )
+
+        workspace = self.client.get(reverse("billing-workspace")).json()
+
+        self.assertEqual(workspace["summary"]["low_stock_count"], 1)
+
     def test_advance_stays_outstanding_until_final_payment(self):
         created = self.create_advance_invoice()
         invoice = Invoice.objects.get(number=created["invoice_number"])

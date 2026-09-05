@@ -17,11 +17,23 @@
   .payment-summary { border: 1px solid #bbb; padding: 8px; margin: 12px 0; }
   .payment-summary div { display: flex; justify-content: space-between; padding: 2px 0; }
   .status { font-weight: bold; }
+  .void-banner { border: 2px solid #9b2c24; color: #9b2c24; padding: 9px; margin: 0 0 14px; text-align: center; font-weight: bold; }
+  .void-banner small { display: block; margin-top: 4px; color: #333; font-weight: normal; }
   .print-btn { margin-top: 16px; padding: 8px 16px; }
   @media print { .print-btn { display: none; } body { margin: 0 auto; } }
 </style>
 </head>
 <body>
+  {% if invoice.status == "VOID" %}
+  <div class="void-banner">
+    VOID / CANCELLED
+    <small>
+      {{ invoice.void_reason }}
+      {% if invoice.voided_at %}<br>{{ invoice.voided_at|date:"d M Y, h:i A" }}{% endif %}
+      {% if invoice.voided_by %} by {{ invoice.voided_by.get_username }}{% endif %}
+    </small>
+  </div>
+  {% endif %}
   <h1>{{ invoice.branch.name }}</h1>
   <div class="meta">
     {% if invoice.branch.address %}{{ invoice.branch.address }}<br>{% endif %}
@@ -37,9 +49,7 @@
   </div>
 
   <table>
-    <thead>
-      <tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
-    </thead>
+    <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
     <tbody>
       {% for item in invoice.items.all %}
       <tr>
@@ -53,18 +63,25 @@
   </table>
 
   <table class="totals">
-    <tr><td>Subtotal</td><td>₹{{ invoice.subtotal }}</td></tr>
+    <tr><td>Subtotal</td><td>&#8377;{{ invoice.subtotal }}</td></tr>
     {% if invoice.bill_type == "GST" %}
-    <tr><td>CGST (9%)</td><td>₹{{ invoice.cgst }}</td></tr>
-    <tr><td>SGST (9%)</td><td>₹{{ invoice.sgst }}</td></tr>
+    <tr><td>CGST (9%)</td><td>&#8377;{{ invoice.cgst }}</td></tr>
+    <tr><td>SGST (9%)</td><td>&#8377;{{ invoice.sgst }}</td></tr>
     {% endif %}
-    <tr class="grand"><td>Total</td><td>₹{{ invoice.total }}</td></tr>
+    <tr class="grand"><td>Total</td><td>&#8377;{{ invoice.total }}</td></tr>
   </table>
 
   <div class="payment-summary">
-    <div><span>Paid</span><strong>₹{{ invoice.paid_amount }}</strong></div>
-    <div><span>Balance due</span><strong>₹{{ invoice.balance_due }}</strong></div>
+    {% if invoice.status == "VOID" %}
+    <div><span>Paid before void</span><strong>&#8377;{{ invoice.paid_amount }}</strong></div>
+    <div><span>Refund recorded</span><strong>&#8377;{{ invoice.refunded_amount }}</strong></div>
+    <div><span>Balance due</span><strong>&#8377;0.00</strong></div>
+    <div><span>Status</span><span class="status">VOID</span></div>
+    {% else %}
+    <div><span>Paid</span><strong>&#8377;{{ invoice.paid_amount }}</strong></div>
+    <div><span>Balance due</span><strong>&#8377;{{ invoice.balance_due }}</strong></div>
     <div><span>Status</span><span class="status">{{ invoice.get_payment_status_display }}</span></div>
+    {% endif %}
   </div>
 
   {% if invoice.payments.all %}
@@ -76,7 +93,7 @@
       <tr>
         <td>{{ payment.payment_date }}<br>{{ payment.get_payment_type_display }}</td>
         <td>{{ payment.get_payment_mode_display }}</td>
-        <td>₹{{ payment.amount }}</td>
+        <td>&#8377;{{ payment.amount }}</td>
       </tr>
       {% endfor %}
     </tbody>

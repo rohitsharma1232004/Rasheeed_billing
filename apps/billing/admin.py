@@ -73,7 +73,11 @@ class InvoiceAdmin(admin.ModelAdmin):
         "tax_amount",
         "total",
         "payment_status",
+        "status",
         "created_by",
+        "voided_by",
+        "voided_at",
+        "void_reason",
     )
 
     @admin.display(description="Paid")

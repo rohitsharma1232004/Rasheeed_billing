@@ -16,6 +16,9 @@
   data-create-invoice-url="{% url 'invoice-create' %}"
   data-settlements-url="{% url 'settlement-list' %}"
   data-expense-url="{% url 'ledger-expense-add' %}"
+  data-inventory-url="{% url 'inventory-workspace' %}"
+  data-product-save-url="{% url 'inventory-product-save' %}"
+  data-stock-adjust-url-template="{% url 'inventory-stock-adjust' product_id=0 %}"
 >
   <aside class="sidebar" aria-label="Main navigation">
     <div class="brand">

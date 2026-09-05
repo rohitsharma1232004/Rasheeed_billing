@@ -14,7 +14,12 @@ from apps.printing.models import Printer, PrintJob
 from apps.printing.tasks import send_print_job
 
 from .models import Customer, Invoice, InvoiceStatus, PaymentStatus
-from .services import PaymentError, create_invoice, record_payment
+from .services import (
+    PaymentError,
+    create_invoice,
+    record_payment,
+    void_invoice as void_invoice_service,
+)
 
 
 def _money_string(value):
@@ -166,6 +171,43 @@ def add_invoice_payment_view(request, number):
             "is_settled": invoice.is_settled,
         },
         status=201,
+    )
+
+
+@login_required
+@require_POST
+def void_invoice_view(request, number):
+    if request.branch is None:
+        return JsonResponse({"error": "No branch context for this session"}, status=403)
+
+    invoice = get_object_or_404(
+        Invoice.objects.for_branch(request.branch), number=number
+    )
+    refund_confirmed = request.POST.get(
+        "refund_confirmed", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    try:
+        voided_invoice = void_invoice_service(
+            invoice=invoice,
+            user=request.user,
+            reason=request.POST.get("reason", ""),
+            refund_confirmed=refund_confirmed,
+        )
+    except PermissionError as exc:
+        return JsonResponse({"error": str(exc)}, status=403)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(
+        {
+            "invoice_number": voided_invoice.number,
+            "status": voided_invoice.status,
+            "status_label": voided_invoice.get_status_display(),
+            "void_reason": voided_invoice.void_reason,
+            "voided_at": voided_invoice.voided_at.isoformat(),
+            "voided_by": request.user.get_username(),
+            "refunded_amount": _money_string(voided_invoice.refunded_amount),
+        }
     )
 
 
