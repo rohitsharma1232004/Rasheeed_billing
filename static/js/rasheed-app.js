@@ -640,7 +640,7 @@ function showReceipt(invoice, lines) {
   modalRoot.innerHTML =
     '<div class="modal-overlay" role="dialog" aria-modal="true">' +
       '<div class="modal-card">' +
-        '<div class="modal-head"><h3>Rasheed<span style="color:var(--brass)">.</span> Invoice</h3>' +
+        '<div class="modal-head"><h3>Furniture Bill Book<span style="color:var(--brass)">.</span> Invoice</h3>' +
         '<p>' + escapeHtml(state.workspace.branch.name) + "</p></div>" +
         '<div class="modal-body">' +
           '<div class="receipt-meta"><span>Invoice</span><strong class="mono">' + escapeHtml(invoice.invoice_number) + "</strong></div>" +
