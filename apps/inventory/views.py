@@ -2,7 +2,6 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
-from django.core.validators import URLValidator
 from django.db import transaction
 from django.db.models import IntegerField, OuterRef, Subquery, Value
 from django.db.models.functions import Coalesce
@@ -104,7 +103,9 @@ def _product_payload(product, *, include_cost):
         "images": [
             {
                 "id": image.id,
-                "image_url": image.image_url,
+                "image_url": (
+                    image.image_file.url if image.image_file else image.image_url
+                ),
                 "angle": image.angle,
                 "angle_label": image.get_angle_display(),
                 "sort_order": image.sort_order,
@@ -205,22 +206,20 @@ def inventory_workspace_view(request):
     )
 
 
-def _validated_image_urls(payload):
-    validator = URLValidator(schemes=["https"])
-    image_urls = {}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+
+
+def _validated_image_files(files):
+    image_files = {}
     for angle, field_name in IMAGE_ANGLES:
-        image_url = payload.get(field_name, "").strip()
-        if len(image_url) > 500:
-            raise ValueError(f"{angle.title()} image URL is too long")
-        if image_url:
-            try:
-                validator(image_url)
-            except ValidationError as exc:
-                raise ValueError(
-                    f"{angle.title()} image must be a valid https:// URL"
-                ) from exc
-        image_urls[angle] = image_url
-    return image_urls
+        image_file = files.get(field_name)
+        if image_file is not None:
+            if image_file.size > MAX_IMAGE_SIZE:
+                raise ValueError(f"{angle.title()} image cannot exceed 5 MB")
+            if not (image_file.content_type or "").startswith("image/"):
+                raise ValueError(f"{angle.title()} image must be a valid image file")
+        image_files[angle] = image_file
+    return image_files
 
 
 @login_required
@@ -256,7 +255,7 @@ def save_product_view(request):
         )
         gst_rate = _parse_decimal(request.POST.get("gst_rate", "18"), "GST rate")
         reorder_level = int(request.POST.get("reorder_level", "0"))
-        image_urls = _validated_image_urls(request.POST)
+        image_files = _validated_image_files(request.FILES)
     except (TypeError, ValueError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -304,33 +303,40 @@ def save_product_view(request):
             product.full_clean()
             product.save()
 
-            for angle, image_url in image_urls.items():
+            for angle, image_file in image_files.items():
+                remove_image = _as_bool(request.POST.get(f"{angle.lower()}_remove"))
                 existing_images = list(
                     ProductImage.objects.filter(
                         product=product, angle=angle
                     ).order_by("id")
                 )
-                if not image_url:
+                if remove_image and not image_file:
                     ProductImage.objects.filter(
                         product=product, angle=angle
                     ).delete()
                     continue
+                if not image_file:
+                    continue
                 if existing_images:
                     image = existing_images[0]
-                    image.image_url = image_url
+                    image.image_url = ""
+                    image.image_file = image_file
                     image.sort_order = IMAGE_SORT_ORDER[angle]
-                    image.save(update_fields=["image_url", "sort_order"])
+                    image.full_clean()
+                    image.save(update_fields=["image_url", "image_file", "sort_order"])
                     if len(existing_images) > 1:
                         ProductImage.objects.filter(
                             pk__in=[item.pk for item in existing_images[1:]]
                         ).delete()
                 else:
-                    ProductImage.objects.create(
+                    image = ProductImage(
                         product=product,
                         angle=angle,
-                        image_url=image_url,
+                        image_file=image_file,
                         sort_order=IMAGE_SORT_ORDER[angle],
                     )
+                    image.full_clean()
+                    image.save()
     except ValidationError as exc:
         return JsonResponse({"error": _validation_message(exc)}, status=400)
 

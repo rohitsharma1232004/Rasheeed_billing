@@ -4,6 +4,11 @@ from .models import Product, ProductImage
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
+    def get_image_url(self, image):
+        return image.image_file.url if image.image_file else image.image_url
+
     class Meta:
         model = ProductImage
         fields = ["id", "image_url", "angle", "sort_order"]
@@ -29,5 +34,6 @@ class ProductSearchSerializer(serializers.ModelSerializer):
             "stock",
             "reorder_level",
             "is_new_arrival",
+            "created_at",
             "images",
         ]

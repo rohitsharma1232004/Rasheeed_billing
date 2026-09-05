@@ -1220,6 +1220,17 @@ function productImageUrl(product, angle) {
   return image ? image.image_url : "";
 }
 
+function imageUploadField(product, angle, fieldName, label) {
+  const currentUrl = productImageUrl(product, angle);
+  return '<div class="modal-field"><label>' + label + ' image file</label>' +
+    '<input name="' + fieldName + '" type="file" accept="image/*">' +
+    (currentUrl
+      ? '<label class="checkbox-panel"><input name="' + angle.toLowerCase() +
+        '_remove" type="checkbox"> Remove current image</label>'
+      : '') +
+    '<small>Maximum 5 MB. Uploading a file replaces the current image.</small></div>';
+}
+
 function openProductModal(productId) {
   const product = productId ? inventoryProductById(productId) : null;
   if (productId && !product) {
@@ -1227,8 +1238,12 @@ function openProductModal(productId) {
     return;
   }
   const categoryOptions = state.inventory.categories.map(function (category) {
-    return '<option value="' + escapeHtml(category.name) + '"></option>';
+    return '<option value="' + escapeHtml(category.name) + '">' +
+      escapeHtml(category.name) + '</option>';
   }).join("");
+  const categoryIsNew = product && !state.inventory.categories.some(function (category) {
+    return category.name.toLowerCase() === product.category.toLowerCase();
+  });
   const title = product ? "Edit product" : "Add product";
   const subtitle = product
     ? "Update catalogue details or deactivate this item."
@@ -1249,10 +1264,14 @@ function openProductModal(productId) {
                 '<input name="sku" maxlength="30" required value="' +
                 escapeHtml(product ? product.sku : "") + '" placeholder="DIN-TEAK-6"></div>' +
               '<div class="modal-field"><label>Category *</label>' +
-                '<input name="category" maxlength="80" list="category-options" required value="' +
-                escapeHtml(product ? product.category : "") +
-                '" placeholder="Select or type a new category"><datalist id="category-options">' +
-                categoryOptions + "</datalist></div>" +
+                '<select name="category" id="product-category" required>' +
+                  '<option value="">Select a category</option>' + categoryOptions +
+                  '<option value="__new__">+ Create new category</option></select>' +
+                '<input name="category_new" id="new-category" maxlength="80"' +
+                  (categoryIsNew ? '' : ' hidden') +
+                  ' value="' + (categoryIsNew ? escapeHtml(product.category) : '') +
+                  '" placeholder="Enter new category name">' +
+                '</div>' +
               '<div class="modal-field"><label>HSN code</label>' +
                 '<input name="hsn_code" maxlength="8" value="' +
                 escapeHtml(product ? product.hsn_code : "") + '" placeholder="9403"></div>' +
@@ -1277,16 +1296,12 @@ function openProductModal(productId) {
                   '> Active and available for billing</label></div>' +
             "</div>" +
             '<details class="image-url-section"><summary>Product images (optional)</summary>' +
-              '<p>Use public HTTPS image links. One image can be stored for each angle.</p>' +
+              '<p>Choose image files from your device. Each image can be replaced or removed while editing.</p>' +
               '<div class="modal-grid">' +
-                '<div class="modal-field"><label>Front image URL</label><input name="image_front" type="url" value="' +
-                  escapeHtml(productImageUrl(product, "FRONT")) + '"></div>' +
-                '<div class="modal-field"><label>Side image URL</label><input name="image_side" type="url" value="' +
-                  escapeHtml(productImageUrl(product, "SIDE")) + '"></div>' +
-                '<div class="modal-field"><label>Back image URL</label><input name="image_back" type="url" value="' +
-                  escapeHtml(productImageUrl(product, "BACK")) + '"></div>' +
-                '<div class="modal-field"><label>Detail image URL</label><input name="image_detail" type="url" value="' +
-                  escapeHtml(productImageUrl(product, "DETAIL")) + '"></div>' +
+                imageUploadField(product, "FRONT", "image_front", "Front") +
+                imageUploadField(product, "SIDE", "image_side", "Side") +
+                imageUploadField(product, "BACK", "image_back", "Back") +
+                imageUploadField(product, "DETAIL", "image_detail", "Detail") +
               "</div></details></div>" +
           '<div class="modal-actions"><button type="button" data-close-modal>Cancel</button>' +
             '<button type="submit" class="primary" id="save-product">' +
@@ -1294,6 +1309,19 @@ function openProductModal(productId) {
         "</form></div></div>";
 
   modalRoot.querySelector("[data-close-modal]").addEventListener("click", closeModal);
+  const categorySelect = document.getElementById("product-category");
+  const newCategoryInput = document.getElementById("new-category");
+  if (categoryIsNew) {
+    categorySelect.value = "__new__";
+  } else if (product) {
+    categorySelect.value = product.category;
+  }
+  categorySelect.addEventListener("change", function () {
+    const isNew = categorySelect.value === "__new__";
+    newCategoryInput.hidden = !isNew;
+    newCategoryInput.required = isNew;
+    if (isNew) newCategoryInput.focus();
+  });
   document.getElementById("product-form").addEventListener("submit", submitProductForm);
   document.querySelector('#product-form input[name="name"]').focus();
 }
@@ -1302,12 +1330,15 @@ async function submitProductForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const button = document.getElementById("save-product");
-  const payload = new URLSearchParams(new FormData(form));
+  const payload = new FormData(form);
   payload.set(
     "is_new_arrival",
     form.elements.is_new_arrival.checked ? "1" : "0"
   );
   payload.set("is_active", form.elements.is_active.checked ? "1" : "0");
+  if (form.elements.category.value === "__new__") {
+    payload.set("category", form.elements.category_new.value);
+  }
   button.disabled = true;
   button.textContent = "Saving...";
   try {
@@ -1321,7 +1352,7 @@ async function submitProductForm(event) {
     showToast(result.message + ". Stock quantity is branch-specific.");
   } catch (error) {
     button.disabled = false;
-    button.textContent = payload.get("product_id") ? "Save changes" : "Create product";
+    button.textContent = form.elements.product_id.value ? "Save changes" : "Create product";
     showToast(error.message, true);
   }
 }
@@ -1458,8 +1489,16 @@ function galleryVisual(product, angle) {
 }
 
 function renderGallery() {
-  const cards = state.products.length
-    ? state.products.map(function (product) {
+  const galleryProducts = state.products.slice().sort(function (first, second) {
+    if (Boolean(first.is_new_arrival) !== Boolean(second.is_new_arrival)) {
+      return first.is_new_arrival ? -1 : 1;
+    }
+    const firstCreated = Date.parse(first.created_at || "") || 0;
+    const secondCreated = Date.parse(second.created_at || "") || 0;
+    return secondCreated - firstCreated || Number(second.id) - Number(first.id);
+  });
+  const cards = galleryProducts.length
+    ? galleryProducts.map(function (product) {
         const angle = state.galleryAngles[product.id] || "FRONT";
         const angleButtons = galleryAngles.map(function (item) {
           return (
@@ -1489,7 +1528,7 @@ function renderGallery() {
   content.innerHTML =
     '<div class="section-heading"><div><h2 class="section-title">Product Gallery</h2>' +
       '<p class="section-sub">Images and product details are loaded from the backend catalogue.</p></div></div>' +
-    '<div class="flow-note">Add Front, Side, Back and Detail image URLs from Django Admin. Missing images use a furniture placeholder.</div>' +
+    '<div class="flow-note">Add Front, Side, Back and Detail image files from the product editor. Missing images use a furniture placeholder.</div>' +
     '<div class="gallery-grid">' + cards + "</div>";
 
   document.querySelectorAll("[data-gallery-angle]").forEach(function (button) {

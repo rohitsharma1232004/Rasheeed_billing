@@ -7,6 +7,9 @@
 - Products now include purchasing price and new-arrival state. Existing `price`
   remains the selling price so the current POS API stays compatible.
 - Product images support Front, Side, Back and Detail gallery angles.
+- Product images are uploaded directly from the product form, stored under
+  `MEDIA_ROOT/product-images/`, and served from `MEDIA_URL` in development.
+  Existing external image URLs remain readable for compatibility.
 - Customers can be linked to invoices.
 - Every receipt is stored in a separate Payment row, allowing one invoice to
   receive an advance, partial payments and a final payment.

@@ -1,5 +1,7 @@
 from decimal import Decimal
+from io import BytesIO
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
@@ -60,13 +62,17 @@ class InventoryWorkspaceViewTests(TestCase):
             "reorder_level": "2",
             "is_new_arrival": "1",
             "is_active": "1",
-            "image_front": "https://example.com/study-front.jpg",
-            "image_side": "",
-            "image_back": "",
-            "image_detail": "",
         }
         data.update(overrides)
         return data
+
+    def image_file(self, name="product.png", color=b"\x00"):
+        from PIL import Image
+
+        image = Image.new("RGB", (2, 2), color=(120, 80, 40))
+        content = BytesIO()
+        image.save(content, format="PNG")
+        return SimpleUploadedFile(name, content.getvalue(), content_type="image/png")
 
     def test_workspace_returns_branch_stock_summary_and_manager_cost(self):
         response = self.client.get(reverse("inventory-workspace"))
@@ -81,6 +87,10 @@ class InventoryWorkspaceViewTests(TestCase):
         self.assertEqual(data["summary"]["stock_cost_value"], "80000.00")
         self.assertEqual(data["products"][0]["stock"], 4)
         self.assertEqual(data["products"][0]["purchasing_price"], "20000.00")
+        self.assertEqual(data["categories"], [{"id": self.category.id, "name": "Living Room"}])
+
+        api_product = self.client.get(reverse("product-search-list")).json()["results"][0]
+        self.assertIn("created_at", api_product)
 
     def test_product_without_stock_row_is_counted_as_zero_and_low_stock(self):
         Product.objects.create(
@@ -102,10 +112,9 @@ class InventoryWorkspaceViewTests(TestCase):
         self.assertTrue(zero_product["is_low_stock"])
 
     def test_manager_can_create_and_deactivate_product_with_image(self):
-        created = self.client.post(
-            reverse("inventory-product-save"),
-            self.product_form(),
-        )
+        form = self.product_form()
+        form["image_front"] = self.image_file()
+        created = self.client.post(reverse("inventory-product-save"), form)
 
         self.assertEqual(created.status_code, 201, created.content)
         product = Product.objects.get(sku="STUDY-OAK")
@@ -114,7 +123,9 @@ class InventoryWorkspaceViewTests(TestCase):
         self.assertTrue(product.is_new_arrival)
         image = ProductImage.objects.get(product=product)
         self.assertEqual(image.angle, ProductImage.Angle.FRONT)
-        self.assertEqual(image.image_url, "https://example.com/study-front.jpg")
+        self.assertTrue(image.image_file.name.startswith("product-images/"))
+        self.assertTrue(image.image_file.storage.exists(image.image_file.name))
+        self.assertTrue(created.json()["product"]["images"][0]["image_url"].startswith("/media/"))
 
         updated = self.client.post(
             reverse("inventory-product-save"),
@@ -123,7 +134,6 @@ class InventoryWorkspaceViewTests(TestCase):
                 name="Oak Study Desk",
                 is_active="0",
                 is_new_arrival="0",
-                image_front="",
             ),
         )
 
@@ -132,6 +142,19 @@ class InventoryWorkspaceViewTests(TestCase):
         self.assertEqual(product.name, "Oak Study Desk")
         self.assertFalse(product.is_active)
         self.assertFalse(product.is_new_arrival)
+        self.assertTrue(ProductImage.objects.filter(product=product).exists())
+
+        removed = self.client.post(
+            reverse("inventory-product-save"),
+            self.product_form(
+                product_id=str(product.id),
+                name="Oak Study Desk",
+                is_active="0",
+                is_new_arrival="0",
+                front_remove="1",
+            ),
+        )
+        self.assertEqual(removed.status_code, 200, removed.content)
         self.assertFalse(ProductImage.objects.filter(product=product).exists())
         self.assertFalse(
             any(

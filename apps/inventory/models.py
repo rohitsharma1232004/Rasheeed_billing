@@ -57,7 +57,10 @@ class ProductImage(models.Model):
         DETAIL = "DETAIL", "Detail"
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="images")
-    image_url = models.URLField(max_length=500)
+    image_url = models.URLField(max_length=500, blank=True)
+    image_file = models.ImageField(
+        upload_to="product-images/%Y/%m/%d/", blank=True, null=True
+    )
     angle = models.CharField(max_length=20, choices=Angle.choices)
     sort_order = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
