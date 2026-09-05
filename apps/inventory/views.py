@@ -10,9 +10,10 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.accounts.models import Role
+from apps.billing.models import PaymentMode
 
 from .models import Category, Product, ProductImage, StockBalance, StockMovement
-from .services import InsufficientStockError, adjust_stock
+from .services import InsufficientStockError, adjust_stock, receive_stock
 
 
 MONEY = Decimal("0.01")
@@ -380,6 +381,10 @@ def adjust_product_stock_view(request, product_id):
             {"error": "Stock In quantity must be greater than zero"}, status=400
         )
 
+    payment_mode = request.POST.get("payment_mode", "").strip().upper()
+    if reason == StockMovement.Reason.PURCHASE and payment_mode not in PaymentMode.values:
+        return JsonResponse({"error": "Select a payment mode for the stock purchase"}, status=400)
+
     reference = request.POST.get("reference", "").strip()
     if not reference:
         return JsonResponse(
@@ -390,14 +395,26 @@ def adjust_product_stock_view(request, product_id):
         return JsonResponse({"error": "Reference is too long"}, status=400)
 
     try:
-        balance = adjust_stock(
-            branch=request.branch,
-            product=product,
-            delta=quantity_delta,
-            reason=reason,
-            reference=reference,
-            user=request.user,
-        )
+        if reason == StockMovement.Reason.PURCHASE:
+            balance = receive_stock(
+                branch=request.branch,
+                product=product,
+                quantity=quantity_delta,
+                reference=reference,
+                payment_mode=payment_mode,
+                user=request.user,
+            )
+        else:
+            balance = adjust_stock(
+                branch=request.branch,
+                product=product,
+                delta=quantity_delta,
+                reason=reason,
+                reference=reference,
+                user=request.user,
+            )
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
     except InsufficientStockError as exc:
         return JsonResponse({"error": str(exc)}, status=409)
 

@@ -1,4 +1,8 @@
 from django.db import transaction
+
+from apps.ledger.models import ExpenseCategory
+from apps.ledger.services import post_expense
+
 from .models import StockBalance, StockMovement
  
  
@@ -39,5 +43,33 @@ def adjust_stock(*, branch, product, delta, reason, reference, user, allow_negat
         branch=branch, product=product, reason=reason,
         quantity_delta=delta, balance_after=new_qty,
         reference=reference, created_by=user,
+    )
+    return balance
+
+
+@transaction.atomic
+def receive_stock(*, branch, product, quantity, reference, payment_mode, user):
+    purchase_amount = product.purchasing_price * quantity
+    if purchase_amount <= 0:
+        raise ValueError(
+            "Set a purchasing price greater than zero before receiving stock"
+        )
+
+    balance = adjust_stock(
+        branch=branch,
+        product=product,
+        delta=quantity,
+        reason=StockMovement.Reason.PURCHASE,
+        reference=reference,
+        user=user,
+    )
+    post_expense(
+        branch=branch,
+        amount=purchase_amount,
+        mode=payment_mode,
+        category=ExpenseCategory.INVENTORY_PURCHASE,
+        description=f"Inventory purchase: {product.name} ({quantity} unit(s))",
+        reference=reference,
+        user=user,
     )
     return balance

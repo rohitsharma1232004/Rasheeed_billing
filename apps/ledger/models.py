@@ -9,6 +9,7 @@ class EntryType(models.TextChoices):
 
 class ExpenseCategory(models.TextChoices):
     SALES = "SALES", "Sales"
+    INVENTORY_PURCHASE = "INVENTORY_PURCHASE", "Inventory Purchase"
     RAW_MATERIAL = "RAW_MATERIAL", "Raw Material"
     TRANSPORT = "TRANSPORT", "Transport & Logistics"
     RENT = "RENT", "Rent"

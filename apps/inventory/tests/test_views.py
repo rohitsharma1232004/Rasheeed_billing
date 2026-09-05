@@ -12,6 +12,7 @@ from apps.inventory.models import (
     StockBalance,
     StockMovement,
 )
+from apps.ledger.models import EntryType, ExpenseCategory, LedgerEntry
 
 
 class InventoryWorkspaceViewTests(TestCase):
@@ -161,11 +162,22 @@ class InventoryWorkspaceViewTests(TestCase):
                 "reason": StockMovement.Reason.PURCHASE,
                 "quantity_delta": "6",
                 "reference": "GRN-1001",
+                "payment_mode": "UPI",
             },
         )
 
         self.assertEqual(stock_in.status_code, 201, stock_in.content)
         self.assertEqual(stock_in.json()["stock"], 10)
+        purchase_entry = LedgerEntry.objects.get()
+        self.assertEqual(purchase_entry.entry_type, EntryType.EXPENSE)
+        self.assertEqual(purchase_entry.category, ExpenseCategory.INVENTORY_PURCHASE)
+        self.assertEqual(purchase_entry.amount, Decimal("120000.00"))
+        self.assertEqual(purchase_entry.payment_mode, "UPI")
+        self.assertEqual(purchase_entry.reference, "GRN-1001")
+        billing_workspace = self.client.get(reverse("billing-workspace")).json()
+        self.assertEqual(billing_workspace["summary"]["ledger_expense"], "120000.00")
+        self.assertEqual(billing_workspace["summary"]["ledger_net"], "-120000.00")
+        self.assertEqual(len(billing_workspace["ledger_entries"]), 1)
 
         correction = self.client.post(
             stock_url,
@@ -192,6 +204,7 @@ class InventoryWorkspaceViewTests(TestCase):
             [6, -3],
         )
         self.assertEqual(movements.last().balance_after, 7)
+        self.assertEqual(LedgerEntry.objects.count(), 1)
 
         workspace = self.client.get(reverse("inventory-workspace")).json()
         self.assertEqual(workspace["movements"][0]["reference"], "COUNT-SEP")
